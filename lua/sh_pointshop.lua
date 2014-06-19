@@ -41,8 +41,15 @@ end
 -- Initialization
 
 function PS:Initialize()
-	if SERVER then self:LoadDataProviders() end
-	if SERVER and self.Config.CheckVersion then self:CheckVersion() end
+	if SERVER then
+		local err, msg = pcall(PS.LoadDataProviders, self)
+		if not err then
+			error("Pointshop failed to initialize- " .. msg)
+			return
+		end
+		if self.Config.CheckVersion then self:CheckVersion() end
+	end
+	PS:LoadItems()
 end
 
 -- Loading

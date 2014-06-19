@@ -229,48 +229,75 @@ function PS:CheckVersion()
 end
 
 -- data providers
-
-PS.DataProviders = {}
+PS.Provider = nil
+PS.SavingQueue = {} -- used to make sure save requests start/finish in order
 
 function PS:LoadDataProviders()
-	local files, _ = file.Find('providers/*', 'LUA')
-	
-	for _, filename in pairs(files) do
-		PROVIDER = {}
-		PROVIDER.__index = {}
-		
-		PROVIDER.ID = string.gsub(filename, '.lua', '')
-		
-		function PROVIDER:GetFallback()
-			return self.DataProviders[self.Fallback]
-		end
-		
-		include('providers/' .. filename)
-		
-		self.DataProviders[PROVIDER.ID] = PROVIDER
+	local filename = "providers/" .. self.Config.DataProvider .. ".lua"
+	if not file.Exists(filename, "LUA") then
+		print("[POINTSHOP] Information: The data provider you have chosen in lua/sh_config.lua cannot be found. Change the value of PS.Config.DataProvider.")
+		error("[POINTSHOP] CRITICAL ERROR- Failed to find data provider \""..filename.."\". Stopping pointshop.")
 	end
+	
+	PROVIDER = {}
+	include(filename)
+	PS.Provider = PROVIDER
 end
 
 function PS:GetPlayerData(ply, callback)
-	local provider = self.DataProviders[self.Config.DataProvider]
-	
-	if not provider or not self.Config.DataProvider then
+	if PS.Provider == nil or not self.Config.DataProvider then
 		Error('PointShop: Missing provider. Update ALL files when there is an update.')
 		return
 	end
 	
-	provider:GetData(ply, function(points, items)
+	PS.Provider:GetData(ply, function(points, items)
 		callback(PS:ValidatePoints(tonumber(points)), PS:ValidateItems(items))
 	end)
 end
 
 function PS:SetPlayerData(ply, points, items)
-	local provider = self.DataProviders[self.Config.DataProvider]
-	
-	if not provider or not self.Config.DataProvider then
+	if PS.Provider == nil or not self.Config.DataProvider then
 		Error('PointShop: Missing provider. Update ALL files when there is an update.')
 		return
 	end
 	
-	provider:SetData(ply, points, items)
+	print("[POINTSHOP] DEBUG: Attempting to save data for " .. ply:GetName()..": " .. points .. " " .. util.TableToJSON(items))
+	
+	if not PS.SavingQueue.ply then
+		print("[POINTSHOP] DEBUG: Queue for " .. ply:GetName() .. " doesn't exist. Creating..")
+		PS.SavingQueue.ply = {}
+	end
+	
+	local emptyqueue = false
+	
+	if next(PS.SavingQueue.ply) == nil then
+		emptyqueue = true
+		print("[POINTSHOP] DEBUG: Queue is empty for " .. ply:GetName() .. ". Running RunSaveQueue.")
+	end
+	
+	print("[POINTSHOP] DEBUG: Adding save to queue for " .. ply:GetName() .. ": " .. points .. " " .. util.TableToJSON(items))
+	table.insert(PS.SavingQueue.ply, {Points = points, Items = items})
+	if emptyqueue then RunSaveQueue(ply) end
+end
+
+function RunSaveQueue(ply)
+	-- SetData should call this function when it's finished (success or failure)
+	-- When this is called, it will check the queue for any more saves
+	-- It will try to get the next item from the queue, remove it from the queue and run set data with it's parameters
+	-- 		index, value = next(table)
+	-- If index is nil, then the end of the queue has been reached and it can terminate
+	local index, value = next(PS.SavingQueue.ply)
+	if index == nil then
+		print("[POINTSHOP] DEBUG: Saving queue is empty for " .. ply:GetName() .. ". Stopping queue.")
+		return
+	end
+	
+	table.remove(PS.SavingQueue.ply, index)
+	local points = value.Points
+	local items = value.Items
+	print("[POINTSHOP] DEBUG: Saving item from queue for player " .. ply:GetName() .. ": " .. points .. " " .. util.TableToJSON(items))
+	timer.Simple(1,function()
+		RunSaveQueue(ply)
+	end)
+	--PS.Provider:SetData(ply, points, items)
 end

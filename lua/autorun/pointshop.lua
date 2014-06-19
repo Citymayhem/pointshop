@@ -32,4 +32,3 @@ if CLIENT then
 end
 
 PS:Initialize()
-PS:LoadItems()
