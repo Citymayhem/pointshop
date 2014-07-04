@@ -97,6 +97,7 @@ function Player:PS_Save()
 	if not self.PS_FirstLoadCompleted then return end
 	
 	PS:SetPlayerData(self, self.PS_Points, self.PS_Items)
+	self:PS_LoadData() -- Reload the player's data as an external source may have changed it
 end
 
 function Player:PS_LoadData()
@@ -107,10 +108,14 @@ function Player:PS_LoadData()
 		self.PS_Points = points
 		self.PS_Items = items
 		
-		self:PS_SendPoints()
-		self:PS_SendItems()
+		net.Start('PS_Update')
+			net.WriteEntity(self)
+			net.WriteUInt(self.PS_Points, 32)
+			net.WriteTable(self.PS_Items)
+		net.Broadcast()
 
 		self.PS_FirstLoadCompleted = true
+		print("[POINTSHOP] DEBUG: Loaded data")
 	end)
 end
 
@@ -458,20 +463,20 @@ end
 
 function Player:PS_SendPoints()
 	self:PS_Save()
-	
+	--[[
 	net.Start('PS_Points')
 		net.WriteEntity(self)
 		net.WriteInt(self.PS_Points, 32)
-	net.Broadcast()
+	net.Broadcast()--]]
 end
 
 function Player:PS_SendItems()
 	self:PS_Save()
-	
+	--[[
 	net.Start('PS_Items')
 		net.WriteEntity(self)
 		net.WriteTable(self.PS_Items)
-	net.Broadcast()
+	net.Broadcast()--]]
 end
 
 function Player:PS_SendClientsideModels()	

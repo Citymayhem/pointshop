@@ -65,6 +65,15 @@ net.Receive('PS_ToggleMenu', function(length)
 	PS:ToggleMenu()
 end)
 
+net.Receive('PS_Update', function(length)
+	local ply = net.ReadEntity()
+	local points = net.ReadUInt(32)
+	local items = net.ReadTable()
+	
+	ply.PS_Points = PS:ValidatePoints(points)
+	ply.PS_Items = PS:ValidateItems(items)
+end)
+
 net.Receive('PS_Items', function(length)
 	local ply = net.ReadEntity()
 	local items = net.ReadTable()

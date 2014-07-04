@@ -1,131 +1,4 @@
 require("mysqloo")
---[[
-MySQL module- http://facepunch.com/showthread.php?t=1357773
-	Old thread- http://facepunch.com/showthread.php?t=1220537
-Original PointShop MySQL module- https://github.com/adamdburton/pointshop-mysql/blob/master/lua/providers/mysql.lua
-	Problems:
-		Falls back on pdata (local database) if unable to connect to database.
-			- Doesn't handle this properly. 
-			- The two quickly become out of sync as only problematic changes are applied to pdata
-			- pdata and MySQL aren't kept in-sync
-		Uses wait
-			- Forces server to wait. Why would you use this???
-		Doesn't handle lost connection to database properly
-			- Should queue up tasks until connection is restored
-			- Tries twice. If both fail, uses pdata incorrectly.
-		Doesn't create tables if they don't exist automatically
-			- You have to run a separate sql statement when adding this to your server
-		Tables aren't normalised
-			- Items and item modifications are in JSON format
-			- Difficult to give players items through just a query
-		Uses uniqueid
-			- Can't see a reason for needing to use this instead of a 64-bit Steam ID or normal Steam ID
-			- Can convert from SteamID -> UniqueID, but not the other way
-		Data storage
-			- SetPoints, GivePoints, TakePoints, SaveItem, GiveItem, TakeItem aren't used
-			- Only uses SetData and GetData
-			- Means you have to update ALL the information stored on a player rather than just what's been changed
-PointShop problems:
-	Inefficient provider detection
-		- Finds every provider and includes them
-		- Sets up a table of providers
-		- At this point, it already knows what provider it should use (config file)
-		- It also assumes it will find a file in lua/providers called provider_name.lua
-		- Much simpler to just try and include "(config.provider_name).lua"
-	Fallback system
-		- Idea is that if a provider fails, you can use another method to store and retrieve data
-		- Doesn't work out so well.
-		- For this to work properly, ALL providers need to be kept in-sync
-		- This doesn't happen
-		- Don't use it
-	Retrieval of data
-		- Gets all data at once (points & items)
-		- Should get points and items separately
-		- Easier to code
-		- More efficient for when you just need one
-		- If you need both, you're going to have to run two queries anyway
-	Updating data
-		- Updates ALL data at once- points and every single item
-		- Should update points and items separately, then each item should be separate
-		- Means if you want to increase their points by 10, you increase their points by 10
-			and then you have to convert all their items and modifications into JSON format
-		- Really inefficient
-	Changing points
-		- Uses what it thinks is latest version of points when setting/adding/subtracting
-		- Means if points get changed by external source, changes are overridden
-		- Should first retrieve points, or use a query with maths
-		- Afterwards, should update cached value or just not cache it
-	Cached data
-		- Caches all data when a player first connects
-		- Any changes made by external sources will be overridden
-		- When the player leaves, it re-saves all the cached data to storage
-	PS_ModifyItem (sv_player_extension)
-		- Assumes modifications will be saved properly
-		- Changes item before even attempting to save modifications 
-	ValidateItems (sh_pointshop)
-		- Removes items not found on server
-		- Won't work for multiple servers with different items on each
-
-MySQL Table Structure:
-	PlayerPSPoints
-		Stores each player's points.
-		Uses a player's 64-bit SteamID to uniquely identify them.
-		Stores points as an unsigned integer
-		Two fields:
-			playerSteam64- player's 64-bit Steam ID
-			playerPoints- player's points
-	PlayerPSItems
-		Stores each player's items, if it's equipped and 
-			any modifications in JSON format.
-		Uses a player's 64-bit SteamID to uniquely identify them.
-		Each row is an item a player has. 
-			If a player has multiple items, there are multiple rows.
-		Four fields:
-			playerSteam64- player's 64-bit Steam ID
-			itemName- item name
-			itemEquipped- if the item is equipped. True or False
-			itemModifications- any modifications to the item
-Data variables:
-	Points should be an integer
-	Items should be a table where the item names are the index
-		and the values are sub-tables. Sub tables:
-			Index		Value
-			Modifiers = {modifications table} (NEVER nil. Use empty table {} instead.)
-			Equipped = true/false
-		e.g. items[item_id] = { 
-				Modifiers = {
-					color = {
-						r = 255,
-						g = 0,
-						b = 255,
-						a = 255
-					}
-				}, 
-				Equipped = false 
-			}
-GetData
-	Used in PS:GetPlayerData (sv_pointshop)
-		Used in PS_LoadData (sv_player_extension)
-SetData
-	Used in PS:SetPlayerData (sv_pointshop)
-		Used in PS_Save (sv_player_extension)
-			Used in PS_SendPoints (sv_player_extension)
-				Used in PS_GivePoints (sv_player_extension)
-					Used to give players points
-				Used in PS_TakePoints (sv_player_extension)
-				Used in PS_SetPoints (sv_player_extension)
-				Used in PS_LoadData (sv_player_extension)
-					Used in PlayerInitialSpawn
-				
-			Used in PS_SendItems (sv_player_extension)
-				Used in PS_GiveItem (sv_player_extension)
-			
-Debug:
-	If two SetDatas are run very close to each other, they will conflict when inserting items.
-	This is because the first one deletes all the items.
-	The second one finds there are no items to delete and moves onto the insert
-	The first one finishes deleting and tries to insert and gets duplicated keys errors
---]]
 
 -- Configuration
 -- MySQL connnection settings
@@ -187,6 +60,8 @@ db:connect()
 function query(sql_string, success_callback)
 	-- Create a query object by running our query
 	local q = db:query(sql_string)
+	
+	-- Queue early bird queries which try to run before the database object is made
 	if q == nil then
 		table.insert(queue, {sql_string, success_callback})
 		return
@@ -290,7 +165,7 @@ function PROVIDER:GetData(ply, callback)
 			for key, row in pairs(data) do
 				-- Check if modifications is nil. If not, it's a JSON string.
 				local modifications = {}
-				if row.itemModifications ~= nil then modifications = util.JSONToTable(row.itemModifications) end
+				if row.itemModifications != nil then modifications = util.JSONToTable(row.itemModifications) end
 				-- Add the item to the player's items table, along with modifications and if it's equipped
 				items[row.itemName] = {Modifiers = modifications, Equipped = row.itemEquipped}
 			end
@@ -306,27 +181,29 @@ end
 	Updates all of a player's items and their points. Really inefficient.
 		Points- must be a positive number. Floats will be truncated.
 		Items- must be a table. Empty tables can be sent (no items).
+		Callback- callback to run on success or failure of saving item
 --]]
-function PROVIDER:SetData(ply, points, items)
+function PROVIDER:SetData(ply, points, items, callback)
+	print("[POINTSHOP] DEBUG: Saving data for " .. ply:GetName() .. ", points: " .. points .. ", items: " .. util.TableToJSON(items))
 	local playerid = ply:SteamID64()
-	if IsInvalidSteamID64(playerid) then return end
+	if IsInvalidSteamID64(playerid) then callback(ply) return end
 	
 	-- Validate points
 	points = math.floor(tonumber(points))
-	if points == nil or points < 0 then return end
+	if points == nil or points < 0 then callback(ply) return end
 	
 	-- Enforce items being a table. If no items, an empty table should be sent (doesn't equate to nil)
-	if type(items) ~= "table" then return end
+	if type(items) != "table" then callback(ply) return end
 	
 	-- Update points first. We should only update items if the first query was successful.
 	-- Otherwise, a player could end up losing an item, but not gaining the points from selling it.
-	local sql_string = "UPDATE " .. mysql_pointstable .. " SET playerPoints = " .. points .. " WHERE playerSteam64 = " .. playerid .. ""
+	local sql_string = "UPDATE " .. mysql_pointstable .. " SET playerPoints = " .. points .. " WHERE playerSteam64 = " .. playerid
 	query(sql_string, function(data)
 		-- Now remove all stored items for the player
 		local sql_string = "DELETE FROM " .. mysql_itemstable .. " WHERE playerSteam64 = " .. playerid
 		query(sql_string, function(data)
 			-- Check if the player has any items to insert
-			if next(items) == nil then return end
+			if next(items) == nil then callback(ply) return end
 			
 			-- Create the base string for the query
 			local sql_string = "INSERT INTO " .. mysql_itemstable .. "(playerSteam64, itemName, itemEquipped, itemModifications) VALUES "
@@ -351,6 +228,9 @@ function PROVIDER:SetData(ply, points, items)
 			end
 			
 			-- Run the insert query to add the items
-			query(sql_string, nil)
+			query(sql_string, function(data)
+				callback(ply)
+			end)
 		end)
 	end)
+end

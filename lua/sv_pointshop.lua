@@ -255,49 +255,56 @@ function PS:GetPlayerData(ply, callback)
 	end)
 end
 
+-- Function to call to save all the player's data at once. REALLY INEFFICIENT.
 function PS:SetPlayerData(ply, points, items)
 	if PS.Provider == nil or not self.Config.DataProvider then
 		Error('PointShop: Missing provider. Update ALL files when there is an update.')
-		return
 	end
 	
-	print("[POINTSHOP] DEBUG: Attempting to save data for " .. ply:GetName()..": " .. points .. " " .. util.TableToJSON(items))
-	
-	if not PS.SavingQueue.ply then
-		print("[POINTSHOP] DEBUG: Queue for " .. ply:GetName() .. " doesn't exist. Creating..")
-		PS.SavingQueue.ply = {}
-	end
-	
+	-- If there are no items in the queue, then we need to start running our save queue since it would've stopped
 	local emptyqueue = false
 	
-	if next(PS.SavingQueue.ply) == nil then
+	if not PS.SavingQueue.ply then
+		-- Create the queue if it doesn't exist
+		PS.SavingQueue.ply = {}
 		emptyqueue = true
-		print("[POINTSHOP] DEBUG: Queue is empty for " .. ply:GetName() .. ". Running RunSaveQueue.")
-	end
+	elseif next(PS.SavingQueue.ply) == nil then emptyqueue = true end
 	
-	print("[POINTSHOP] DEBUG: Adding save to queue for " .. ply:GetName() .. ": " .. points .. " " .. util.TableToJSON(items))
+	-- Add item to queue
 	table.insert(PS.SavingQueue.ply, {Points = points, Items = items})
+	
+	-- Start running queue if it's empty
 	if emptyqueue then RunSaveQueue(ply) end
 end
 
+-- Tells the provider to try to save the next item in the queue
 function RunSaveQueue(ply)
-	-- SetData should call this function when it's finished (success or failure)
-	-- When this is called, it will check the queue for any more saves
-	-- It will try to get the next item from the queue, remove it from the queue and run set data with it's parameters
-	-- 		index, value = next(table)
-	-- If index is nil, then the end of the queue has been reached and it can terminate
-	local index, value = next(PS.SavingQueue.ply)
-	if index == nil then
-		print("[POINTSHOP] DEBUG: Saving queue is empty for " .. ply:GetName() .. ". Stopping queue.")
-		return
-	end
+	-- Make sure the player didn't leave between queueing up the save and actually saving it
+	-- Will result in the save being lost, but we need the player still connected to get their 64-bit SteamID
+	if not ply:IsValid() then PS.SavingQueue.ply = {} return end
 	
-	table.remove(PS.SavingQueue.ply, index)
+	local index, value = next(PS.SavingQueue.ply)
+	-- If we've reached the end of the queue, stop and wait for another item to be added
+	if index == nil then return end
+	
 	local points = value.Points
 	local items = value.Items
-	print("[POINTSHOP] DEBUG: Saving item from queue for player " .. ply:GetName() .. ": " .. points .. " " .. util.TableToJSON(items))
-	timer.Simple(1,function()
-		RunSaveQueue(ply)
-	end)
-	--PS.Provider:SetData(ply, points, items)
+	PS.Provider:SetData(ply, points, items, PlayerDataSaved)
+end
+
+
+-- Called when an item in the save queue has been saved or failed to be saved
+function PlayerDataSaved(ply)
+	-- If the player disconnected then empty the saving queue for them
+	if not ply:IsValid() then PS.SavingQueue.ply = {} return end
+	
+	-- Get the item in the queue we've finished saving
+	local index, value = next(PS.SavingQueue.ply)
+	if index == nil then 
+		Error("[POINTSHOP] Attempted to remove an item from a player's save queue when there are no items in the queue!")
+	end
+	
+	-- Remove the item from the queue and run the next item in the queue
+	table.remove(PS.SavingQueue.ply, index)
+	RunSaveQueue(ply)
 end

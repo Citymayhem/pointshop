@@ -25,7 +25,7 @@ function PROVIDER:GetData(ply, callback)
 	return callback(points, items)
 end
 
-function PROVIDER:SetData(ply, points, items)
+function PROVIDER:SetData(ply, points, items, callback)
 	if not file.IsDir('pointshop', 'DATA') then
 		file.CreateDir('pointshop')
 	end
@@ -36,4 +36,6 @@ function PROVIDER:SetData(ply, points, items)
 		Points = points,
 		Items = items
 	}))
+	
+	callback(ply)
 end
